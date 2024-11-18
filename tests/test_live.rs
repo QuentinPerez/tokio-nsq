@@ -12,8 +12,11 @@ fn init() {
 }
 
 fn random_topic() -> Arc<NSQTopic> {
-    let name: String =
-        thread_rng().sample_iter(&Alphanumeric).take(30).collect();
+    let name: String = thread_rng()
+        .sample_iter(&Alphanumeric)
+        .map(|value| value as char)
+        .take(30)
+        .collect();
 
     NSQTopic::new(name).unwrap()
 }
