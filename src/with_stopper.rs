@@ -1,4 +1,4 @@
-use ::log::*;
+use ::tracing::*;
 
 pub async fn with_stopper(
     shutdown_rx: tokio::sync::oneshot::Receiver<()>,

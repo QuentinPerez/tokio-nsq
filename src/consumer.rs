@@ -1,9 +1,9 @@
 use ::anyhow::Error;
 use ::core::result::Result;
-use ::log::*;
 use ::std::collections::HashMap;
 use ::std::collections::HashSet;
 use ::std::sync::Arc;
+use ::tracing::*;
 use http_body_util::BodyExt as _;
 use hyper_util::client::legacy::connect::HttpConnector;
 
@@ -292,7 +292,14 @@ async fn lookup(
     }
 
     for client in new_clients.into_iter() {
-        client.queue_message(MessageToNSQ::RDY(1)).await?;
+        loop {
+            if let Err(err) = client.queue_message(MessageToNSQ::RDY(1)).await {
+                error!("lookup error: {}, retrying", err);
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                continue;
+            }
+            break;
+        }
     }
 
     rebalancer_step(config.max_in_flight, clients_ref).await;
