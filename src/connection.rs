@@ -20,8 +20,12 @@ use ::tokio::io::AsyncWrite;
 use ::tokio::io::AsyncWriteExt;
 use ::tokio::io::ReadBuf;
 use ::tokio::time::{sleep, Sleep};
-use ::tokio_rustls::webpki::DNSNameRef;
 use ::tokio_rustls::{rustls::ClientConfig, TlsConnector};
+use client::danger::HandshakeSignatureValid;
+use client::danger::ServerCertVerified;
+use client::danger::ServerCertVerifier;
+use pki_types::DnsName;
+use pki_types::ServerName;
 
 use crate::built_info;
 use crate::connection_config::*;
@@ -42,17 +46,41 @@ struct ProtocolError {
     message: String,
 }
 
+#[derive(Debug)]
 struct Unverified {}
 
 impl ServerCertVerifier for Unverified {
     fn verify_server_cert(
         &self,
-        _roots: &RootCertStore,
-        _presented_certs: &[Certificate],
-        _dns_name: DNSNameRef,
+        _end_entity: &pki_types::CertificateDer<'_>,
+        _intermediates: &[pki_types::CertificateDer<'_>],
+        _server_name: &pki_types::ServerName<'_>,
         _ocsp_response: &[u8],
-    ) -> Result<ServerCertVerified, TLSError> {
+        _now: pki_types::UnixTime,
+    ) -> Result<client::danger::ServerCertVerified, rustls::Error> {
         Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &pki_types::CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &pki_types::CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        vec![]
     }
 }
 
@@ -755,19 +783,24 @@ async fn run_connection(state: &mut NSQDConnectionState) -> Result<(), Error> {
     };
 
     let (stream_rx, stream_tx) = if let Some(config_tls) = config_tls {
-        let verifier = Arc::new(Unverified {});
+        // let verifier = Arc::new(Unverified {});
 
         let config = match &config_tls.client_config {
             Some(client_config) => client_config.clone(),
             None => {
-                let mut config = ClientConfig::new();
-                config.dangerous().set_certificate_verifier(verifier);
+                let config = ClientConfig::builder()
+                    .dangerous()
+                    .with_custom_certificate_verifier(Arc::new(Unverified {}))
+                    .with_no_client_auth();
+
                 Arc::new(config)
             }
         };
 
         let config = TlsConnector::from(config);
-        let dnsname = DNSNameRef::try_from_ascii_str(&config_tls.domain_name)?;
+        let dnsname = ServerName::DnsName(DnsName::try_from(
+            config_tls.domain_name.clone(),
+        )?);
 
         // Turn stream back into TcpStream as rustls does buffering itself
         let stream = stream.into_inner().into_inner();
@@ -806,7 +839,7 @@ async fn run_connection(state: &mut NSQDConnectionState) -> Result<(), Error> {
         {
             let stream_tx = DeflateEncoder::with_quality(
                 stream_tx,
-                async_compression::Level::Precise(level.get() as u32),
+                async_compression::Level::Precise(level.get() as i32),
             );
 
             let mut stream_rx = tokio::io::BufReader::new(DeflateDecoder::new(

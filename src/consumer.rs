@@ -4,6 +4,8 @@ use ::log::*;
 use ::std::collections::HashMap;
 use ::std::collections::HashSet;
 use ::std::sync::Arc;
+use http_body_util::BodyExt as _;
+use hyper_util::client::legacy::connect::HttpConnector;
 
 use crate::connection::*;
 use crate::connection_config::*;
@@ -218,19 +220,23 @@ async fn lookup(
 
     let uri = raw_uri.parse::<hyper::Uri>()?;
 
-    let client = hyper::Client::new();
+    let client = hyper_util::client::legacy::Client::builder(
+        hyper_util::rt::TokioExecutor::new(),
+    )
+    .build(HttpConnector::new());
 
     let request = hyper::Request::builder()
         .method(hyper::Method::GET)
         .uri(uri)
         .header("Accept", "application/vnd.nsq; version=1.0")
-        .body(hyper::Body::empty())?;
+        .body(http_body_util::Empty::<bytes::Bytes>::new())?;
 
     let response = client.request(request).await?;
 
-    let buffer = hyper::body::to_bytes(response).await?;
+    let body = response.into_body();
+    let bytes = body.collect().await?.to_bytes();
 
-    let lookup_response: LookupResponse = serde_json::from_slice(&buffer)?;
+    let lookup_response: LookupResponse = serde_json::from_slice(&bytes)?;
     let mut new_clients = Vec::new();
 
     {
